@@ -14,5 +14,5 @@ def read_root():
 @app.get("/db-test")
 def test_db_connection(db: Session = Depends(get_db)):
     # Simple query to test DB connection
-    items = db.query(models.Item).all()
-    return {"status": "success", "items_count": len(items)}
+    items = db.query(models.Product).all()
+    return {"status": "success", "products_count": len(items)}
