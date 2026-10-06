@@ -1,8 +1,7 @@
-from .returns import ReturnBase, ReturnCreate, ReturnUpdate, ReturnResponse
+from .returns import ReturnRequest, ReturnDecision, AdminReview
 
 __all__ = [
-    "ReturnBase",
-    "ReturnCreate",
-    "ReturnUpdate",
-    "ReturnResponse"
+    "ReturnRequest",
+    "ReturnDecision",
+    "AdminReview"
 ]
