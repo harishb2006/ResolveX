@@ -910,7 +910,7 @@ That is your project.
 
 The interesting part isn't:
 
-> "I used Gemini."
+> "I connected Jev AI for structured claim analysis."
 
 The interesting parts are:
 
@@ -1070,55 +1070,66 @@ Output:
 
 ---
 
-### Phase 4 — AI Evidence Layer
+### Phase 4 — Jev AI Claim Analysis (implemented)
 
-Add AI for:
+Implemented Jev analysis for:
 
 ```text
 customer description classification
-image/evidence analysis
+claim text analysis (image pixels are not analyzed)
 reason extraction
 ```
 
 Don't let AI directly control the final decision.
 
----
+The server calls Jev AI SystemOne through `https://jev-ai.pro/api/v1/systemone`, using `jev-latest` by default. The request classifies the issue, compares it with the selected return reason, estimates described severity, and returns a possible warranty signal. This result is saved as reviewer context; deterministic policy and risk engines still own the return outcome. ResolveX sends the product name, selected reason, customer description, and whether evidence is attached. It does not send image bytes or customer/order identifiers.
 
-### Phase 5 — Confidence + Human Review
+Set these environment variables in the server process locally and in your deployment provider's secret/environment settings:
 
-Build:
-
-```text
-High confidence
-      ↓
-automatic
-
-Low confidence
-      ↓
-review queue
+```bash
+read -r -s -p "Jev API key: " JEV_AI_API_KEY
+printf '\n'
+export JEV_AI_API_KEY JEV_AI_MODEL=jev-latest
 ```
 
-Add reviewer actions and audit history.
+Keep the API key server-side. Never add it to the React app, commit it, or print it in logs. With no server key, return requests still proceed through deterministic policy and risk checks and AI context is marked unavailable. Jev errors do not trigger automatic retries; inspect `Retry-After` for rate limits, and check Jev usage before manually retrying any request whose outcome may be uncertain.
+
+The backend loads `server/.env` locally and accepts the existing `Jev_api_key` variable or the canonical `JEV_AI_API_KEY` variable. Deployment should use the canonical name in the platform's server-side secret settings.
+
+First verify account/model access without inference or balance use:
+
+```bash
+cd server
+python -m scripts.jev_check
+```
+
+Only after the model list confirms access, explicitly run one small paid decision:
+
+```bash
+python -m scripts.jev_check --decision
+```
+
+The script prints the exact Jev destinations, returns safe usage/billing metadata, and does not print the credential. The decision option runs exactly one request; actual charge depends on account balance and Jev's current model billing. Configure a rotated key before running it.
 
 ---
 
-### Phase 6 — Production-quality improvements
+### Phase 5 — Agent Harness + Human Review
 
-Finally add:
+Build an auditable orchestrator around distinct, typed roles: deterministic policy evaluator, risk evaluator, Jev claim analyst, and a refund proposal agent. Give agents only the data and tools each role needs; treat customer text and model output as untrusted. Persist each role's inputs/outputs, model/run IDs, confidence, and disagreements. Route low confidence, policy/risk disagreement, malformed model output, and high-value claims to a reviewer. Keep inference retries disabled unless a failed request is known not to have run.
 
-```text
-background workers
-Redis
-idempotency
-rate limiting
-authentication
-observability
-tests
-Docker
-CI/CD
-```
+The orchestrator must produce an explainable case packet before a human or later refund executor can act. A Jev response is not authorization to move money.
 
-Now it becomes a serious portfolio project.
+### Phase 6 — Guarded Refund Execution
+
+Add a payment adapter in sandbox mode first. Require a validated eligible decision, amount/order matching, idempotency keys, refund caps, an explicit state machine, and a human approval path for exceptions. Restrict tools to allowlisted actions; never let an LLM call a payment provider directly. Add reconciliation for timeouts where a provider may have processed a refund despite a lost response.
+
+### Phase 7 — Observability + Evals
+
+Record request IDs, model, Jev run IDs, status/error codes, token usage, billing headers, latency, reviewer outcomes, and refund state transitions. Redact API keys and unnecessary customer data. Build a fixed evaluation set for policy edge cases, prompt injection, unsupported evidence, inconsistent descriptions, and Jev outages; compare results before changing prompts/models. Track false approvals, false denials, escalation rates, and duplicate-action incidents.
+
+### Phase 8 — Production Operations
+
+Add background workers, Redis, rate limiting, authentication, Docker and CI/CD after the orchestration and refund safeguards are defined.
 
 ---
 

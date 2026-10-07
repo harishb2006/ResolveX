@@ -18,6 +18,8 @@ with engine.begin() as connection:
     connection.execute(text("ALTER TABLE returns ADD COLUMN IF NOT EXISTS decision VARCHAR NOT NULL DEFAULT 'MANUAL_REVIEW'"))
     connection.execute(text("ALTER TABLE returns ADD COLUMN IF NOT EXISTS confidence FLOAT NOT NULL DEFAULT 0"))
     connection.execute(text("ALTER TABLE returns ADD COLUMN IF NOT EXISTS risk_score FLOAT NOT NULL DEFAULT 0"))
+    connection.execute(text("ALTER TABLE returns ADD COLUMN IF NOT EXISTS risk_factors JSON NOT NULL DEFAULT '[]'::json"))
+    connection.execute(text("ALTER TABLE returns ADD COLUMN IF NOT EXISTS ai_analysis JSON NOT NULL DEFAULT '{}'::json"))
     connection.execute(text("ALTER TABLE returns ADD COLUMN IF NOT EXISTS reasons JSON NOT NULL DEFAULT '[]'::json"))
 
 from fastapi.middleware.cors import CORSMiddleware

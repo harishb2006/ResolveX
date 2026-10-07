@@ -7,6 +7,8 @@ from sqlalchemy.orm import Session, joinedload
 import models
 from database import get_db
 from schemas.returns import ReturnRequest, ReturnDecision, AdminReview
+from services.risk_engine import calculate_risk, RISK_REVIEW_THRESHOLD
+from services.ai_evidence import analyze_return, evidence_is_valid
 
 router = APIRouter(prefix="/returns", tags=["Returns"])
 
@@ -14,7 +16,7 @@ HIGH_VALUE_REVIEW_THRESHOLD = 100000
 EVIDENCE_REQUIRED_REASONS = {"Product is defective", "Product arrived damaged", "Wrong product received"}
 
 
-def evaluate_policy(order, item, request: ReturnRequest, ignore_existing_return=False):
+def evaluate_policy(order, item, request: ReturnRequest, ignore_existing_return=False, evidence_valid=True):
     checks = []
     now = datetime.now(timezone.utc)
     purchased = order.created_at
@@ -34,7 +36,7 @@ def evaluate_policy(order, item, request: ReturnRequest, ignore_existing_return=
     checks.append({"key": "not_previously_returned", "label": "Item has no existing return request", "passed": no_prior_return, "detail": "Item already has a return request" if not no_prior_return else "No previous return found"})
 
     evidence_required = request.reason in EVIDENCE_REQUIRED_REASONS
-    evidence_ok = bool(request.evidence) if evidence_required else True
+    evidence_ok = (bool(request.evidence) and evidence_valid) if evidence_required else True
     checks.append({"key": "evidence", "label": "Evidence provided when required", "passed": evidence_ok, "detail": "Photo evidence is required for this reason" if evidence_required and not evidence_ok else ("Evidence attached" if request.evidence else "Evidence not required for this reason")})
 
     warranty_applicable = request.reason == "Product is defective" and age_days <= (item.product.warranty_days or 365)
@@ -53,26 +55,26 @@ def evaluate_policy(order, item, request: ReturnRequest, ignore_existing_return=
         reasons.append("Photo evidence is required for the selected reason")
 
     if not delivered or not no_prior_return:
-        decision, confidence, risk = "REJECT", 0.95, 0.75
+        decision, confidence = "REJECT", 0.95
     elif not within_window and warranty_applicable:
         if evidence_ok:
-            decision, confidence, risk = "WARRANTY_SERVICE", 0.86, 0.12
+            decision, confidence = "WARRANTY_SERVICE", 0.86
             reasons.append("Return window has passed, but the reported defect is within the product warranty")
         else:
-            decision, confidence, risk = "MANUAL_REVIEW", 0.55, 0.5
+            decision, confidence = "MANUAL_REVIEW", 0.55
     elif not within_window or not product_returnable:
-        decision, confidence, risk = "REJECT", 0.95, 0.75
+        decision, confidence = "REJECT", 0.95
     elif not evidence_ok:
-        decision, confidence, risk = "MANUAL_REVIEW", 0.55, 0.5
+        decision, confidence = "MANUAL_REVIEW", 0.55
     elif item.unit_price >= HIGH_VALUE_REVIEW_THRESHOLD:
-        decision, confidence, risk = "MANUAL_REVIEW", 0.72, 0.62
+        decision, confidence = "MANUAL_REVIEW", 0.72
         reasons.append("High-value item requires human review")
     else:
-        decision, confidence, risk = "AUTO_REFUND", 0.92, 0.08
+        decision, confidence = "AUTO_REFUND", 0.92
         reasons.append("Order is within the return window and the item is eligible")
         if evidence_required:
             reasons.append("Required evidence was provided")
-    return decision, confidence, risk, reasons, checks
+    return decision, confidence, reasons, checks
 
 
 def review_payload(ret):
@@ -82,6 +84,9 @@ def review_payload(ret):
         id=str(ret.id), order_id=f"ORD-{order.id:03d}", product_name=item.product.name,
         price=f"₹{item.unit_price:,.0f}", reason=ret.reason, description=ret.description,
         evidence=ret.evidence or [], risk_score=ret.risk_score, confidence=ret.confidence,
+        risk_level="HIGH" if ret.risk_score >= RISK_REVIEW_THRESHOLD else "LOW",
+        risk_threshold=RISK_REVIEW_THRESHOLD, risk_factors=ret.risk_factors or [],
+        ai_analysis=ret.ai_analysis or {},
         status=ret.status.value.upper(), decision=ret.decision, reasons=ret.reasons or [],
         policy_checks=[],
     )
@@ -144,10 +149,20 @@ def create_return(req: ReturnRequest, db: Session = Depends(get_db)):
     if not item:
         raise HTTPException(status_code=404, detail="Order has no items")
 
-    decision, confidence, risk, reasons, checks = evaluate_policy(order, item, req)
+    evidence_valid = evidence_is_valid(req.evidence)
+    if req.evidence and not evidence_valid:
+        raise HTTPException(status_code=422, detail="Evidence must contain valid JPEG, PNG, or WebP images totaling no more than 2 MB")
+    ai_analysis = analyze_return(req.reason, req.description, req.evidence, item.product.name)
+    decision, confidence, reasons, checks = evaluate_policy(order, item, req, evidence_valid=evidence_valid)
+    risk = calculate_risk(db, order, item, req)
+    if decision in {"AUTO_REFUND", "WARRANTY_SERVICE"} and risk["score"] >= RISK_REVIEW_THRESHOLD:
+        decision = "MANUAL_REVIEW"
+        confidence = min(confidence, 0.60)
+        reasons.append(f"Elevated risk score ({risk['score']:.2f}) reached the {RISK_REVIEW_THRESHOLD:.2f} human-review threshold")
     ret = models.Return(order_item_id=item.id, reason=req.reason, description=req.description,
                         evidence=req.evidence, decision=decision, confidence=confidence,
-                        risk_score=risk, reasons=reasons,
+                        risk_score=risk["score"], risk_factors=risk["factors"], reasons=reasons,
+                        ai_analysis=ai_analysis,
                         status=models.ReturnStatus.REQUESTED if decision == "MANUAL_REVIEW" else (models.ReturnStatus.REJECTED if decision == "REJECT" else models.ReturnStatus.APPROVED))
     db.add(ret)
     try:
@@ -156,7 +171,10 @@ def create_return(req: ReturnRequest, db: Session = Depends(get_db)):
         db.rollback()
         raise HTTPException(status_code=409, detail="A return request already exists for this item")
     db.refresh(ret)
-    return ReturnDecision(id=str(ret.id), decision=decision, confidence=confidence, risk_score=risk, reasons=reasons, policy_checks=checks)
+    return ReturnDecision(id=str(ret.id), decision=decision, confidence=confidence,
+                          risk_score=risk["score"], risk_level=risk["level"],
+                          risk_threshold=risk["threshold"], risk_factors=risk["factors"],
+                          ai_analysis=ai_analysis, reasons=reasons, policy_checks=checks)
 
 
 @router.get("/admin", response_model=List[AdminReview])
@@ -173,7 +191,7 @@ def get_admin_review(review_id: str, db: Session = Depends(get_db)):
     payload = review_payload(case)
     order = case.order_item.order
     item = case.order_item
-    _, _, _, _, checks = evaluate_policy(order, item, ReturnRequest(order_id=payload.order_id, reason=case.reason, description=case.description, evidence=case.evidence or []), ignore_existing_return=True)
+    _, _, _, checks = evaluate_policy(order, item, ReturnRequest(order_id=payload.order_id, reason=case.reason, description=case.description, evidence=case.evidence or []), ignore_existing_return=True)
     payload.policy_checks = checks
     return payload
 
