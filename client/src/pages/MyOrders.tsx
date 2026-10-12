@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Icon from '../components/Icon';
+import { apiFetch } from '../auth/AuthContext';
 
 export default function MyOrders() {
   const [orders, setOrders] = useState<any[]>([]);
@@ -9,7 +10,7 @@ export default function MyOrders() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    fetch('http://localhost:8000/returns/orders')
+    apiFetch('/returns/orders')
       .then(async response => {
         if (!response.ok) throw new Error('Could not load orders');
         setOrders(await response.json());
@@ -38,7 +39,7 @@ export default function MyOrders() {
         <article key={order.orderId} className="order-card">
           <div className="order-product-icon"><Icon name="box" size={21} /></div>
           <div className="order-card-main"><div className="order-card-title"><strong>{order.productName}</strong><span className="mono-id">{order.orderId}</span></div><div className="order-card-meta"><span>{order.price}</span><i /> <span>Ordered {order.purchaseDate ? new Date(order.purchaseDate).toLocaleDateString() : 'date unavailable'}</span></div></div>
-          <span className={`status-pill ${order.returnStatus ? (order.returnStatus === 'REJECTED' ? 'status-danger' : order.returnStatus === 'REQUESTED' ? 'status-warning' : 'status-info') : 'status-success'}`}><i className="status-dot" />{order.returnStatus ? `Return ${order.returnStatus.toLowerCase()}` : 'Delivered'}</span>
+          <span className={`status-pill ${order.returnStatus ? (order.returnStatus === 'REJECTED' ? 'status-danger' : order.returnStatus === 'REQUESTED' ? 'status-warning' : 'status-info') : 'status-success'}`}><i className="status-dot" />{order.returnStatus ? order.returnStatus === 'REQUESTED' ? 'Return under review' : order.returnStatus === 'REJECTED' ? 'Return not approved' : order.returnDecision === 'WARRANTY_SERVICE' ? 'Warranty support arranged' : order.returnDecision === 'AUTO_REPLACE' || order.returnDecision === 'APPROVED_REPLACE' ? 'Replacement approved' : 'Refund approved' : 'Delivered'}</span>
           <button onClick={() => navigate(`/return/${order.orderId}`)} disabled={Boolean(order.returnStatus)} className="soft-button order-action">{order.returnStatus ? 'Request submitted' : 'Request return'} <Icon name="arrow" size={13} /></button>
         </article>
       ))}</div>

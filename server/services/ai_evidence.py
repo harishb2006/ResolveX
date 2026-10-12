@@ -37,6 +37,12 @@ SEVERITY_CHOICES = {
     "high": "A major function may be unavailable or the described issue may prevent normal use.",
     "unclear": "Severity cannot be estimated reliably from this description.",
 }
+RESOLUTION_CHOICES = {
+    "refund": "The customer selected a refund. Assess only whether the described issue is compatible with a refund request.",
+    "replacement": "The customer selected a replacement. Assess only whether the described issue is compatible with a replacement request.",
+    "either": "The description does not strongly favor either resolution.",
+    "needs_clarification": "There is not enough information to comment on resolution fit.",
+}
 
 ALLOWED_EVIDENCE_MIME_TYPES = {"image/jpeg", "image/png", "image/webp"}
 MAX_EVIDENCE_BYTES = 2 * 1024 * 1024
@@ -83,6 +89,7 @@ def _empty_analysis(status: str, model: str, limitation: str) -> dict:
         "reason_classification": None,
         "reason_alignment": None,
         "severity": None,
+        "resolution_guidance": None,
         "possible_warranty_issue": None,
         "warranty_probability": None,
         "evidence_findings": [],
@@ -103,7 +110,7 @@ def _answer(answers: dict, key: str) -> dict:
     return value if isinstance(value, dict) else {}
 
 
-def analyze_return(reason: str, description: str, evidence: list[str], product_name: str = "") -> dict:
+def analyze_return(reason: str, description: str, evidence: list[str], product_name: str = "", desired_resolution: str = "refund") -> dict:
     model = configured_model()
     try:
         evidence_mime = None
@@ -112,6 +119,7 @@ def analyze_return(reason: str, description: str, evidence: list[str], product_n
             evidence_mime = header.removeprefix("data:").split(";", 1)[0]
         state = {
             "selected_reason": reason,
+            "customer_requested_resolution": desired_resolution,
             "customer_description": description,
             "product_name": product_name,
             "evidence_attached": bool(evidence),
@@ -134,6 +142,11 @@ def analyze_return(reason: str, description: str, evidence: list[str], product_n
                 "instructions": "Estimate severity from the described impact only. Do not infer damage from an attachment because image pixels are not included. Choose unclear when uncertain.",
                 "criteria": SEVERITY_CHOICES,
             },
+            "resolution_guidance": {
+                "type": "choice",
+                "instructions": "Consider the customer's chosen refund or replacement request and the claim description. This is advisory only: do not decide eligibility, invent policy, or override the customer's choice. Choose needs_clarification if uncertain.",
+                "criteria": RESOLUTION_CHOICES,
+            },
             "warranty_signal": {
                 "type": "noul",
                 "instructions": "Does the text describe a possible product fault that may merit checking the warranty policy? This is only a signal, not a warranty determination or return decision.",
@@ -144,15 +157,25 @@ def analyze_return(reason: str, description: str, evidence: list[str], product_n
         response = system_one(state, questions, model=model)
         answers = response.body.get("answers")
         if not isinstance(answers, dict):
-            return _empty_analysis("unavailable", model, "Jev returned an unexpected answer format. Policy and risk checks still run.")
+            return _empty_analysis("malformed", model, "Jev returned an unexpected answer format. Human review is required.")
 
         issue = _answer(answers, "issue_type")
         alignment = _answer(answers, "reason_alignment")
         severity = _answer(answers, "severity")
+        resolution = _answer(answers, "resolution_guidance")
         warranty = _answer(answers, "warranty_signal")
         issue_value = issue.get("choice") if issue.get("choice") in ISSUE_CHOICES else "unclear"
         alignment_value = alignment.get("choice") if alignment.get("choice") in ALIGNMENT_CHOICES else "insufficient_info"
         severity_value = severity.get("choice") if severity.get("choice") in SEVERITY_CHOICES else "unclear"
+        resolution_value = resolution.get("choice") if resolution.get("choice") in RESOLUTION_CHOICES else "needs_clarification"
+        required_answers_valid = (
+            issue.get("choice") in ISSUE_CHOICES
+            and alignment.get("choice") in ALIGNMENT_CHOICES
+            and severity.get("choice") in SEVERITY_CHOICES
+            and resolution.get("choice") in RESOLUTION_CHOICES
+        )
+        if not required_answers_valid:
+            return _empty_analysis("malformed", model, "Jev returned incomplete or invalid structured answers. Human review is required.")
         try:
             warranty_probability = max(0.0, min(1.0, float(warranty.get("noul"))))
         except (TypeError, ValueError):
@@ -177,6 +200,7 @@ def analyze_return(reason: str, description: str, evidence: list[str], product_n
             "reason_classification": issue_value,
             "reason_alignment": alignment_value,
             "severity": severity_value,
+            "resolution_guidance": resolution_value,
             "possible_warranty_issue": warranty_probability >= 0.5 if warranty_probability is not None else None,
             "warranty_probability": warranty_probability,
             "evidence_findings": [],
@@ -216,4 +240,4 @@ def analyze_return(reason: str, description: str, evidence: list[str], product_n
             result["limitations"] = ["Jev's decision outcome may be uncertain. Check Jev usage before manually retrying to avoid duplicate inference charges."]
         return result
     except (ValueError, TypeError, KeyError):
-        return _empty_analysis("unavailable", model, "Jev returned data that could not be interpreted. Policy and risk checks still run.")
+        return _empty_analysis("malformed", model, "Jev returned data that could not be interpreted. Human review is required.")

@@ -9,6 +9,8 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     email = Column(String, unique=True, index=True, nullable=False)
     name = Column(String, nullable=False)
+    phone_number = Column(String, unique=True, index=True, nullable=True)
+    role = Column(String, nullable=False, default="customer", server_default="customer")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     orders = relationship("Order", back_populates="user")

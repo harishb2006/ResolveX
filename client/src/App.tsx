@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { BrowserRouter, NavLink, Route, Routes, useLocation, Link } from 'react-router-dom';
+import { BrowserRouter, NavLink, Navigate, Route, Routes, useLocation, Link } from 'react-router-dom';
 import './index.css';
 import Icon from './components/Icon';
 
@@ -8,16 +8,20 @@ import MyOrders from './pages/MyOrders';
 import RequestReturn from './pages/RequestReturn';
 import AdminDashboard from './pages/AdminDashboard';
 import AdminReview from './pages/AdminReview';
+import Login from './pages/Login';
+import { AuthProvider, useAuth } from './auth/AuthContext';
 
-const navigation = [
+const customerNavigation = [
   { to: '/', label: 'Storefront', icon: 'grid' as const, end: true },
-  { to: '/orders', label: 'My orders', icon: 'bag' as const },
-  { to: '/admin', label: 'Review queue', icon: 'shield' as const },
+  { to: '/orders', label: 'My orders', icon: 'bag' as const, end: false },
 ];
+const adminNavigation = [{ to: '/admin', label: 'Review queue', icon: 'shield' as const, end: false }];
 
 function Workspace() {
+  const { user, logout } = useAuth();
   const [dark, setDark] = useState(() => localStorage.getItem('resolvex-theme') === 'dark');
   const location = useLocation();
+  const navigation = user?.role === 'admin' ? adminNavigation : customerNavigation;
   const page = location.pathname.startsWith('/admin/review') ? 'Case review'
     : location.pathname.startsWith('/admin') ? 'Review queue'
     : location.pathname.startsWith('/return') ? 'Return request'
@@ -51,9 +55,9 @@ function Workspace() {
         </button>
 
         <div className="sidebar-bottom">
-          <div className="user-avatar">RX</div>
-          <div className="user-meta"><strong>Demo workspace</strong><small>Customer portal</small></div>
-          <button className="icon-button" aria-label="Settings"><Icon name="settings" /></button>
+          <div className="user-avatar">{user?.role === 'admin' ? 'AD' : 'CU'}</div>
+          <div className="user-meta"><strong>{user?.name || 'ResolveX user'}</strong><small>{user?.role === 'admin' ? 'Administrator' : user?.mobile || 'Customer account'}</small></div>
+          <button className="icon-button" aria-label="Sign out" title="Sign out" onClick={() => void logout()}><Icon name="logout" /></button>
         </div>
       </aside>
 
@@ -63,13 +67,18 @@ function Workspace() {
           <div className="topbar-actions"><span className="system-status"><i /> All systems ready</span><button className="help-button"><span>?</span> Help</button></div>
         </header>
         <main className="page-content">
-          <Routes>
+          {user?.role === 'customer' ? <Routes>
             <Route path="/" element={<Home />} />
             <Route path="/orders" element={<MyOrders />} />
             <Route path="/return/:orderId" element={<RequestReturn />} />
+            <Route path="/login" element={<Navigate to="/" replace />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes> : <Routes>
             <Route path="/admin" element={<AdminDashboard />} />
             <Route path="/admin/review/:reviewId" element={<AdminReview />} />
-          </Routes>
+            <Route path="/login" element={<Navigate to="/admin" replace />} />
+            <Route path="*" element={<Navigate to="/admin" replace />} />
+          </Routes>}
         </main>
       </div>
 
@@ -100,8 +109,15 @@ function Workspace() {
   );
 }
 
+function AuthenticatedApp() {
+  const { user, loading } = useAuth();
+  if (loading) return <div className="auth-loading"><span className="mini-spinner" /> Restoring session…</div>;
+  if (!user) return <Routes><Route path="/login" element={<Login />} /><Route path="*" element={<Navigate to="/login" replace />} /></Routes>;
+  return <Workspace />;
+}
+
 function App() {
-  return <BrowserRouter><Workspace /></BrowserRouter>;
+  return <BrowserRouter><AuthProvider><AuthenticatedApp /></AuthProvider></BrowserRouter>;
 }
 
 export default App;
