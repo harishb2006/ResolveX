@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Icon from '../components/Icon';
+import { apiFetch } from '../auth/AuthContext';
 
 export default function AdminDashboard() {
   const [reviews, setReviews] = useState<any[]>([]);
@@ -9,7 +10,7 @@ export default function AdminDashboard() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    fetch("http://localhost:8000/returns/admin")
+    apiFetch('/returns/admin')
       .then(res => { if (!res.ok) throw new Error('Could not load the review queue'); return res.json(); })
       .then(data => setReviews(data))
       .catch(() => setError('Could not connect to the review queue. Check that the API is running.'))

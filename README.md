@@ -1082,7 +1082,7 @@ reason extraction
 
 Don't let AI directly control the final decision.
 
-The server calls Jev AI SystemOne through `https://jev-ai.pro/api/v1/systemone`, using `jev-latest` by default. The request classifies the issue, compares it with the selected return reason, estimates described severity, and returns a possible warranty signal. This result is saved as reviewer context; deterministic policy and risk engines still own the return outcome. ResolveX sends the product name, selected reason, customer description, and whether evidence is attached. It does not send image bytes or customer/order identifiers.
+The server calls Jev AI SystemOne through `https://jev-ai.pro/api/v1/systemone`, using `jev-latest` by default. The request classifies the issue, compares it with the selected return reason, estimates described severity, and returns advisory resolution and warranty signals. ResolveX sends the product name, selected reason, customer description, and whether evidence is attached. It does not send image bytes or customer/order identifiers. The Phase 6 harness records the Jev result and routes unavailable, malformed, or uncertain results to human review.
 
 Set these environment variables in the server process locally and in your deployment provider's secret/environment settings:
 
@@ -1092,7 +1092,7 @@ printf '\n'
 export JEV_AI_API_KEY JEV_AI_MODEL=jev-latest
 ```
 
-Keep the API key server-side. Never add it to the React app, commit it, or print it in logs. With no server key, return requests still proceed through deterministic policy and risk checks and AI context is marked unavailable. Jev errors do not trigger automatic retries; inspect `Retry-After` for rate limits, and check Jev usage before manually retrying any request whose outcome may be uncertain.
+Keep the API key server-side. Never add it to the React app, commit it, or print it in logs. With no server key, deterministic policy and risk checks still run, Jev context is marked unavailable, and the Phase 6 harness sends eligible or uncertain cases to human review. Jev errors do not trigger automatic retries; inspect `Retry-After` for rate limits, and check Jev usage before manually retrying any request whose outcome may be uncertain.
 
 The backend loads `server/.env` locally and accepts the existing `Jev_api_key` variable or the canonical `JEV_AI_API_KEY` variable. Deployment should use the canonical name in the platform's server-side secret settings.
 
@@ -1113,23 +1113,29 @@ The script prints the exact Jev destinations, returns safe usage/billing metadat
 
 ---
 
-### Phase 5 — Agent Harness + Human Review
+### Phase 5 — Demo Authentication + Session Management (implemented)
 
-Build an auditable orchestrator around distinct, typed roles: deterministic policy evaluator, risk evaluator, Jev claim analyst, and a refund proposal agent. Give agents only the data and tools each role needs; treat customer text and model output as untrusted. Persist each role's inputs/outputs, model/run IDs, confidence, and disagreements. Route low confidence, policy/risk disagreement, malformed model output, and high-value claims to a reviewer. Keep inference retries disabled unless a failed request is known not to have run.
+Add two local demo identities: one customer signed in with a fixed mobile/OTP pair, and one admin signed in with a username/password. Issue an eight-hour signed JWT and persist its session ID so logout revokes it. Scope orders and return requests by the customer's user ID, and protect the admin review queue with a role check.
 
-The orchestrator must produce an explainable case packet before a human or later refund executor can act. A Jev response is not authorization to move money.
+For this local demo, mobile `2222222222` always uses fixed OTP `654321`; other 10-digit numbers receive a random six-digit demo code shown in the login screen. Codes expire after five minutes, allow five verification attempts, and are limited to five sends per number in ten minutes. No SMS is sent. Admin credentials load from the server environment and accept `username`/`password` in `server/.env` or `DEMO_ADMIN_USERNAME`/`DEMO_ADMIN_PASSWORD`; set a strong `JWT_SECRET_KEY`. This local-only OTP display is not real phone verification. The app refuses to start with `APP_ENV=production` until real OTP delivery and production authentication safeguards replace demo auth.
 
-### Phase 6 — Guarded Refund Execution
+### Phase 6 — Agent Harness + Human Review (implemented)
+
+An auditable server-side harness now runs distinct roles: deterministic policy evaluator, risk evaluator, Jev claim analyst, and deterministic resolution proposer. Each role receives only the fields it needs. Customer text is treated as untrusted data in Jev instructions, Jev's structured answers are validated, and neither role has payment or shipping tools. Each return stores role assessments, scoped inputs, outputs, Jev model/run/usage/billing metadata, disagreements, escalation reasons, and an explicit no-execution record. The admin case view displays that audit packet.
+
+Low or missing Jev confidence, unavailable or malformed Jev results, conflicts between the selected reason and claim text, risk threshold conflicts, warranty paths, and high-value claims are sent to the human review queue. Eligible cases are only proposed for approval when no escalation is present. Admin approval records a case decision; it does not move money or create a shipment. Jev output is never authorization to execute a refund.
+
+### Phase 7 — Guarded Refund Execution
 
 Add a payment adapter in sandbox mode first. Require a validated eligible decision, amount/order matching, idempotency keys, refund caps, an explicit state machine, and a human approval path for exceptions. Restrict tools to allowlisted actions; never let an LLM call a payment provider directly. Add reconciliation for timeouts where a provider may have processed a refund despite a lost response.
 
-### Phase 7 — Observability + Evals
+### Phase 8 — Observability + Evals
 
 Record request IDs, model, Jev run IDs, status/error codes, token usage, billing headers, latency, reviewer outcomes, and refund state transitions. Redact API keys and unnecessary customer data. Build a fixed evaluation set for policy edge cases, prompt injection, unsupported evidence, inconsistent descriptions, and Jev outages; compare results before changing prompts/models. Track false approvals, false denials, escalation rates, and duplicate-action incidents.
 
-### Phase 8 — Production Operations
+### Phase 9 — Production Operations
 
-Add background workers, Redis, rate limiting, authentication, Docker and CI/CD after the orchestration and refund safeguards are defined.
+Replace demo credentials with a real identity provider and SMS OTP, then add background workers, Redis, rate limiting, secure cookie/session handling, Docker and CI/CD after the orchestration and refund safeguards are defined.
 
 ---
 

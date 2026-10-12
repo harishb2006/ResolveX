@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Icon from '../components/Icon';
+import { apiFetch } from '../auth/AuthContext';
 
 const PRODUCTS = [
   { id: 'p1', name: 'MacBook Pro M3', price: 145000, image: 'laptop' as const, category: 'Computers', tint: 'violet' },
@@ -19,7 +20,7 @@ export default function Home() {
     setError('');
     setBuyingId(product.id);
     try {
-      const response = await fetch('http://localhost:8000/returns/orders/demo', {
+      const response = await apiFetch('/returns/orders/demo', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ product_name: product.name, price: product.price })
       });

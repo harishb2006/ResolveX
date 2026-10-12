@@ -3,3 +3,4 @@ uvicorn
 sqlalchemy
 psycopg
 python-dotenv
+PyJWT>=2.8,<3

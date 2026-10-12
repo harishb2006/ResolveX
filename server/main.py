@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 import models
 from database import engine, get_db
-from routers import return_router
+from routers import auth_router, return_router
 
 models.Base.metadata.create_all(bind=engine)
 
@@ -13,13 +13,18 @@ with engine.begin() as connection:
     connection.execute(text("ALTER TABLE products ADD COLUMN IF NOT EXISTS returnable BOOLEAN NOT NULL DEFAULT TRUE"))
     connection.execute(text("ALTER TABLE products ADD COLUMN IF NOT EXISTS return_window_days INTEGER NOT NULL DEFAULT 30"))
     connection.execute(text("ALTER TABLE products ADD COLUMN IF NOT EXISTS warranty_days INTEGER NOT NULL DEFAULT 365"))
+    connection.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_number VARCHAR"))
+    connection.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR NOT NULL DEFAULT 'customer'"))
+    connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_phone_number ON users (phone_number) WHERE phone_number IS NOT NULL"))
     connection.execute(text("ALTER TABLE returns ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT ''"))
+    connection.execute(text("ALTER TABLE returns ADD COLUMN IF NOT EXISTS desired_resolution VARCHAR NOT NULL DEFAULT 'refund'"))
     connection.execute(text("ALTER TABLE returns ADD COLUMN IF NOT EXISTS evidence JSON NOT NULL DEFAULT '[]'::json"))
     connection.execute(text("ALTER TABLE returns ADD COLUMN IF NOT EXISTS decision VARCHAR NOT NULL DEFAULT 'MANUAL_REVIEW'"))
     connection.execute(text("ALTER TABLE returns ADD COLUMN IF NOT EXISTS confidence FLOAT NOT NULL DEFAULT 0"))
     connection.execute(text("ALTER TABLE returns ADD COLUMN IF NOT EXISTS risk_score FLOAT NOT NULL DEFAULT 0"))
     connection.execute(text("ALTER TABLE returns ADD COLUMN IF NOT EXISTS risk_factors JSON NOT NULL DEFAULT '[]'::json"))
     connection.execute(text("ALTER TABLE returns ADD COLUMN IF NOT EXISTS ai_analysis JSON NOT NULL DEFAULT '{}'::json"))
+    connection.execute(text("ALTER TABLE returns ADD COLUMN IF NOT EXISTS agent_audit JSON NOT NULL DEFAULT '{}'::json"))
     connection.execute(text("ALTER TABLE returns ADD COLUMN IF NOT EXISTS reasons JSON NOT NULL DEFAULT '[]'::json"))
 
 from fastapi.middleware.cors import CORSMiddleware
@@ -35,6 +40,7 @@ app.add_middleware(
 )
 
 app.include_router(return_router.router)
+app.include_router(auth_router.router)
 
 @app.get("/")
 def read_root():

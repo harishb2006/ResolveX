@@ -4,6 +4,8 @@ import Icon from '../components/Icon';
 import PolicyCheckPath from '../components/PolicyCheckPath';
 import RiskBreakdown from '../components/RiskBreakdown';
 import AIAnalysisCard from '../components/AIAnalysisCard';
+import AgentAuditCard from '../components/AgentAuditCard';
+import { apiFetch } from '../auth/AuthContext';
 
 export default function AdminReview() {
   const { reviewId } = useParams();
@@ -13,7 +15,7 @@ export default function AdminReview() {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    fetch(`http://localhost:8000/returns/admin/${reviewId}`)
+    apiFetch(`/returns/admin/${reviewId}`)
       .then(res => res.json())
       .then(data => setReview(data))
       .catch(() => setError('Could not load this review.'));
@@ -22,7 +24,7 @@ export default function AdminReview() {
   const handleDecision = async (status: string) => {
     setSaving(true);
     try {
-      const response = await fetch(`http://localhost:8000/returns/admin/${reviewId}/decision`, {
+      const response = await apiFetch(`/returns/admin/${reviewId}/decision`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status })
@@ -47,12 +49,13 @@ export default function AdminReview() {
       <div className="review-detail-main">
         <section className="detail-panel">
           <div className="panel-title"><span className="panel-title-icon"><Icon name="receipt" /></span><div><strong>Request details</strong><small>Order and customer-provided information</small></div></div>
-          <div className="detail-pairs"><div><span>ORDER</span><strong className="mono-id">{review.order_id}</strong></div><div><span>PRODUCT</span><strong>{review.product_name}</strong></div><div><span>REASON</span><strong>{review.reason}</strong></div><div><span>ITEM VALUE</span><strong>{review.price}</strong></div></div>
+          <div className="detail-pairs"><div><span>ORDER</span><strong className="mono-id">{review.order_id}</strong></div><div><span>PRODUCT</span><strong>{review.product_name}</strong></div><div><span>REASON</span><strong>{review.reason}</strong></div><div><span>REQUESTED OUTCOME</span><strong>{review.desired_resolution}</strong></div><div><span>ITEM VALUE</span><strong>{review.price}</strong></div></div>
           <div className="detail-description"><span className="subtle-label">CUSTOMER DESCRIPTION</span><p>{review.description || 'No additional description supplied.'}</p></div>
           {review.evidence?.length > 0 && <div className="evidence-block"><span className="subtle-label">ATTACHED EVIDENCE</span>{review.evidence[0]?.startsWith('data:image/') ? <img src={review.evidence[0]} alt="Customer return evidence" /> : <div className="evidence-missing"><Icon name="box" /> Evidence preview unavailable</div>}</div>}
         </section>
 
         <AIAnalysisCard analysis={review.ai_analysis} />
+        <AgentAuditCard audit={review.agent_audit} />
 
         <section className="detail-panel policy-review-panel">
           <div className="panel-title"><span className="panel-title-icon violet"><Icon name="shield" /></span><div><strong>Policy evaluation</strong><small>Connected path through the return rules</small></div><span className="status-pill status-info">{review.policy_checks?.filter((check: any) => check.passed).length || 0} / {review.policy_checks?.length || 0} passed</span></div>

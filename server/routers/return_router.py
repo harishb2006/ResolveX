@@ -1,5 +1,5 @@
-from datetime import datetime, timezone
 from typing import List
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session, joinedload
@@ -7,74 +7,32 @@ from sqlalchemy.orm import Session, joinedload
 import models
 from database import get_db
 from schemas.returns import ReturnRequest, ReturnDecision, AdminReview
-from services.risk_engine import calculate_risk, RISK_REVIEW_THRESHOLD
-from services.ai_evidence import analyze_return, evidence_is_valid
+from services.agent_harness import run_return_harness
+from services.policy_engine import evaluate_policy
+from services.risk_engine import RISK_REVIEW_THRESHOLD
+from services.ai_evidence import evidence_is_valid
+from routers.auth_router import require_admin, require_customer
 
 router = APIRouter(prefix="/returns", tags=["Returns"])
 
-HIGH_VALUE_REVIEW_THRESHOLD = 100000
-EVIDENCE_REQUIRED_REASONS = {"Product is defective", "Product arrived damaged", "Wrong product received"}
-
-
-def evaluate_policy(order, item, request: ReturnRequest, ignore_existing_return=False, evidence_valid=True):
-    checks = []
-    now = datetime.now(timezone.utc)
-    purchased = order.created_at
-    if purchased and purchased.tzinfo is None:
-        purchased = purchased.replace(tzinfo=timezone.utc)
-    return_window_days = item.product.return_window_days or 30
-    age_days = max(0, (now - purchased).days) if purchased else return_window_days + 1
-    within_window = age_days <= return_window_days
-    checks.append({"key": "within_return_window", "label": f"Within {return_window_days}-day return window", "passed": within_window, "detail": f"Order is {age_days} days old"})
-
-    delivered = order.status == models.OrderStatus.COMPLETED
-    checks.append({"key": "order_delivered", "label": "Order has been delivered", "passed": delivered, "detail": f"Current order status: {order.status.value}"})
-
-    no_prior_return = item.item_return is None or ignore_existing_return
-    product_returnable = item.product.returnable
-    checks.append({"key": "product_returnable", "label": "Product is return eligible", "passed": product_returnable, "detail": "Product policy allows returns" if product_returnable else "Product policy marks this item non-returnable"})
-    checks.append({"key": "not_previously_returned", "label": "Item has no existing return request", "passed": no_prior_return, "detail": "Item already has a return request" if not no_prior_return else "No previous return found"})
-
-    evidence_required = request.reason in EVIDENCE_REQUIRED_REASONS
-    evidence_ok = (bool(request.evidence) and evidence_valid) if evidence_required else True
-    checks.append({"key": "evidence", "label": "Evidence provided when required", "passed": evidence_ok, "detail": "Photo evidence is required for this reason" if evidence_required and not evidence_ok else ("Evidence attached" if request.evidence else "Evidence not required for this reason")})
-
-    warranty_applicable = request.reason == "Product is defective" and age_days <= (item.product.warranty_days or 365)
-    checks.append({"key": "warranty", "label": "Defect covered by product warranty", "passed": warranty_applicable, "detail": f"Warranty period: {item.product.warranty_days or 365} days"})
-
-    reasons = []
-    if not within_window:
-        reasons.append(f"Request is outside the {return_window_days}-day return window")
-    if not delivered:
-        reasons.append("Order has not been delivered yet")
-    if not no_prior_return:
-        reasons.append("A return request already exists for this item")
-    if not product_returnable:
-        reasons.append("Product policy does not allow returns")
-    if not evidence_ok:
-        reasons.append("Photo evidence is required for the selected reason")
-
-    if not delivered or not no_prior_return:
-        decision, confidence = "REJECT", 0.95
-    elif not within_window and warranty_applicable:
-        if evidence_ok:
-            decision, confidence = "WARRANTY_SERVICE", 0.86
-            reasons.append("Return window has passed, but the reported defect is within the product warranty")
-        else:
-            decision, confidence = "MANUAL_REVIEW", 0.55
-    elif not within_window or not product_returnable:
-        decision, confidence = "REJECT", 0.95
-    elif not evidence_ok:
-        decision, confidence = "MANUAL_REVIEW", 0.55
-    elif item.unit_price >= HIGH_VALUE_REVIEW_THRESHOLD:
-        decision, confidence = "MANUAL_REVIEW", 0.72
-        reasons.append("High-value item requires human review")
-    else:
-        decision, confidence = "AUTO_REFUND", 0.92
-        reasons.append("Order is within the return window and the item is eligible")
-        if evidence_required:
-            reasons.append("Required evidence was provided")
-    return decision, confidence, reasons, checks
+def customer_outcome(decision: str, desired_resolution: str, reasons: list[str]) -> tuple[str, str]:
+    action = "refund" if desired_resolution == "refund" else "replacement"
+    if decision == "AUTO_REFUND":
+        return "Your refund request is approved.", "This demo records the approval but does not issue a payment."
+    if decision == "AUTO_REPLACE":
+        return "Your replacement request is approved.", "This demo records the approval but does not create a shipment."
+    if decision == "WARRANTY_SERVICE":
+        return f"Your {action} request needs a warranty check.", "A support reviewer will check the warranty and confirm the next step with you."
+    if decision == "MANUAL_REVIEW":
+        return f"Your {action} request has been sent for review.", "We’ll update this order after a support reviewer checks the details."
+    reason = next((reason for reason in reasons if reason in {
+        "Order has not been delivered yet",
+        "A return request already exists for this item",
+        "Product policy does not allow returns",
+    } or reason.startswith("Request is outside the ")), None)
+    if reason and reason.startswith("Request is outside the "):
+        reason = "The return window for this item has ended."
+    return "We can’t approve this return request.", reason or "This item does not meet the return policy."
 
 
 def review_payload(ret):
@@ -82,31 +40,36 @@ def review_payload(ret):
     order = item.order
     return AdminReview(
         id=str(ret.id), order_id=f"ORD-{order.id:03d}", product_name=item.product.name,
-        price=f"₹{item.unit_price:,.0f}", reason=ret.reason, description=ret.description,
+        price=f"₹{item.unit_price:,.0f}", reason=ret.reason, desired_resolution=ret.desired_resolution,
+        description=ret.description,
         evidence=ret.evidence or [], risk_score=ret.risk_score, confidence=ret.confidence,
         risk_level="HIGH" if ret.risk_score >= RISK_REVIEW_THRESHOLD else "LOW",
         risk_threshold=RISK_REVIEW_THRESHOLD, risk_factors=ret.risk_factors or [],
         ai_analysis=ret.ai_analysis or {},
+        agent_audit=ret.agent_audit or {},
         status=ret.status.value.upper(), decision=ret.decision, reasons=ret.reasons or [],
         policy_checks=[],
     )
 
 
 @router.get("/orders")
-def list_orders(db: Session = Depends(get_db)):
-    """List delivered demo orders; real order ownership/authentication is not implemented yet."""
-    orders = db.query(models.Order).options(joinedload(models.Order.items).joinedload(models.OrderItem.product), joinedload(models.Order.items).joinedload(models.OrderItem.item_return)).order_by(models.Order.id).all()
+def list_orders(principal: dict = Depends(require_customer), db: Session = Depends(get_db)):
+    """List only the signed-in customer's orders."""
+    user_id = principal["user"].id
+    orders = db.query(models.Order).options(joinedload(models.Order.items).joinedload(models.OrderItem.product), joinedload(models.Order.items).joinedload(models.OrderItem.item_return)).filter(models.Order.user_id == user_id).order_by(models.Order.id).all()
     return [
         {"orderId": f"ORD-{order.id:03d}", "productName": item.product.name,
          "price": f"₹{item.unit_price:,.0f}", "purchaseDate": order.created_at.isoformat() if order.created_at else None,
          "deliveryDate": None, "status": order.status.value.upper(),
-         "returnStatus": item.item_return.status.value.upper() if item.item_return else None}
+         "returnStatus": item.item_return.status.value.upper() if item.item_return else None,
+         "returnDecision": item.item_return.decision if item.item_return else None,
+         "desiredResolution": item.item_return.desired_resolution if item.item_return else None}
         for order in orders for item in order.items
     ]
 
 
 @router.post("/orders/demo")
-def create_demo_order(payload: dict, db: Session = Depends(get_db)):
+def create_demo_order(payload: dict, principal: dict = Depends(require_customer), db: Session = Depends(get_db)):
     """Create a completed sample order from the storefront for the local demo."""
     name = str(payload.get("product_name", "")).strip()
     try:
@@ -115,11 +78,7 @@ def create_demo_order(payload: dict, db: Session = Depends(get_db)):
         raise HTTPException(status_code=422, detail="A valid product price is required")
     if not name or price <= 0:
         raise HTTPException(status_code=422, detail="Product name and positive price are required")
-    user = db.query(models.User).filter(models.User.email == "demo@resolvex.local").first()
-    if not user:
-        user = models.User(email="demo@resolvex.local", name="Demo Customer")
-        db.add(user)
-        db.flush()
+    user = principal["user"]
     product = db.query(models.Product).filter(models.Product.name == name).first()
     if not product:
         product = models.Product(name=name, price=price, stock_quantity=1)
@@ -137,12 +96,12 @@ def create_demo_order(payload: dict, db: Session = Depends(get_db)):
 
 
 @router.post("/", response_model=ReturnDecision)
-def create_return(req: ReturnRequest, db: Session = Depends(get_db)):
+def create_return(req: ReturnRequest, principal: dict = Depends(require_customer), db: Session = Depends(get_db)):
     try:
         order_id = int(req.order_id.removeprefix("ORD-").lstrip("0") or "0")
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid order ID")
-    order = db.query(models.Order).options(joinedload(models.Order.items).joinedload(models.OrderItem.product), joinedload(models.Order.items).joinedload(models.OrderItem.item_return)).filter(models.Order.id == order_id).first()
+    order = db.query(models.Order).options(joinedload(models.Order.items).joinedload(models.OrderItem.product), joinedload(models.Order.items).joinedload(models.OrderItem.item_return)).filter(models.Order.id == order_id, models.Order.user_id == principal["user"].id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     item = order.items[0] if order.items else None
@@ -152,18 +111,17 @@ def create_return(req: ReturnRequest, db: Session = Depends(get_db)):
     evidence_valid = evidence_is_valid(req.evidence)
     if req.evidence and not evidence_valid:
         raise HTTPException(status_code=422, detail="Evidence must contain valid JPEG, PNG, or WebP images totaling no more than 2 MB")
-    ai_analysis = analyze_return(req.reason, req.description, req.evidence, item.product.name)
-    decision, confidence, reasons, checks = evaluate_policy(order, item, req, evidence_valid=evidence_valid)
-    risk = calculate_risk(db, order, item, req)
-    if decision in {"AUTO_REFUND", "WARRANTY_SERVICE"} and risk["score"] >= RISK_REVIEW_THRESHOLD:
-        decision = "MANUAL_REVIEW"
-        confidence = min(confidence, 0.60)
-        reasons.append(f"Elevated risk score ({risk['score']:.2f}) reached the {RISK_REVIEW_THRESHOLD:.2f} human-review threshold")
-    ret = models.Return(order_item_id=item.id, reason=req.reason, description=req.description,
+    orchestration = run_return_harness(db, order, item, req, evidence_valid)
+    decision = orchestration["decision"]
+    confidence = orchestration["confidence"]
+    reasons = orchestration["reasons"]
+    risk = orchestration["risk"]
+    ai_analysis = orchestration["ai_analysis"]
+    ret = models.Return(order_item_id=item.id, reason=req.reason, desired_resolution=req.desired_resolution, description=req.description,
                         evidence=req.evidence, decision=decision, confidence=confidence,
                         risk_score=risk["score"], risk_factors=risk["factors"], reasons=reasons,
-                        ai_analysis=ai_analysis,
-                        status=models.ReturnStatus.REQUESTED if decision == "MANUAL_REVIEW" else (models.ReturnStatus.REJECTED if decision == "REJECT" else models.ReturnStatus.APPROVED))
+                        ai_analysis=ai_analysis, agent_audit=orchestration["agent_audit"],
+                        status=models.ReturnStatus.REQUESTED if decision in {"MANUAL_REVIEW", "WARRANTY_SERVICE"} else (models.ReturnStatus.REJECTED if decision == "REJECT" else models.ReturnStatus.APPROVED))
     db.add(ret)
     try:
         db.commit()
@@ -171,33 +129,32 @@ def create_return(req: ReturnRequest, db: Session = Depends(get_db)):
         db.rollback()
         raise HTTPException(status_code=409, detail="A return request already exists for this item")
     db.refresh(ret)
-    return ReturnDecision(id=str(ret.id), decision=decision, confidence=confidence,
-                          risk_score=risk["score"], risk_level=risk["level"],
-                          risk_threshold=risk["threshold"], risk_factors=risk["factors"],
-                          ai_analysis=ai_analysis, reasons=reasons, policy_checks=checks)
+    message, next_step = customer_outcome(decision, req.desired_resolution, reasons)
+    return ReturnDecision(id=str(ret.id), decision=decision, desired_resolution=req.desired_resolution,
+                          customer_message=message, next_step=next_step)
 
 
 @router.get("/admin", response_model=List[AdminReview])
-def get_admin_reviews(db: Session = Depends(get_db)):
+def get_admin_reviews(principal: dict = Depends(require_admin), db: Session = Depends(get_db)):
     cases = db.query(models.Return).options(joinedload(models.Return.order_item).joinedload(models.OrderItem.order), joinedload(models.Return.order_item).joinedload(models.OrderItem.product)).filter(models.Return.status == models.ReturnStatus.REQUESTED).all()
     return [review_payload(case) for case in cases]
 
 
 @router.get("/admin/{review_id}", response_model=AdminReview)
-def get_admin_review(review_id: str, db: Session = Depends(get_db)):
+def get_admin_review(review_id: str, principal: dict = Depends(require_admin), db: Session = Depends(get_db)):
     case = db.query(models.Return).options(joinedload(models.Return.order_item).joinedload(models.OrderItem.order), joinedload(models.Return.order_item).joinedload(models.OrderItem.product)).filter(models.Return.id == int(review_id)).first()
     if not case:
         raise HTTPException(status_code=404, detail="Review not found")
     payload = review_payload(case)
     order = case.order_item.order
     item = case.order_item
-    _, _, _, checks = evaluate_policy(order, item, ReturnRequest(order_id=payload.order_id, reason=case.reason, description=case.description, evidence=case.evidence or []), ignore_existing_return=True)
+    _, _, _, checks = evaluate_policy(order, item, ReturnRequest(order_id=payload.order_id, reason=case.reason, desired_resolution=case.desired_resolution, description=case.description, evidence=case.evidence or []), ignore_existing_return=True)
     payload.policy_checks = checks
     return payload
 
 
 @router.post("/admin/{review_id}/decision")
-def make_admin_decision(review_id: str, decision: dict, db: Session = Depends(get_db)):
+def make_admin_decision(review_id: str, decision: dict, principal: dict = Depends(require_admin), db: Session = Depends(get_db)):
     case = db.query(models.Return).filter(models.Return.id == int(review_id)).first()
     if not case:
         raise HTTPException(status_code=404, detail="Review not found")
@@ -208,5 +165,16 @@ def make_admin_decision(review_id: str, decision: dict, db: Session = Depends(ge
         raise HTTPException(status_code=422, detail="Unsupported review decision")
     case.status = status_map[choice]
     case.decision = choice
+    audit = dict(case.agent_audit or {})
+    events = list(audit.get("events") or [])
+    events.append({
+        "event": "admin_decision_recorded",
+        "at": datetime.now(timezone.utc).isoformat(),
+        "reviewer_user_id": principal["user"].id,
+        "decision": choice,
+        "execution_performed": False,
+    })
+    audit["events"] = events
+    case.agent_audit = audit
     db.commit()
     return {"message": f"Review {review_id} updated", "status": choice}

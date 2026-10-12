@@ -8,6 +8,7 @@ type Analysis = {
   reason_classification?: string | null;
   reason_alignment?: string | null;
   severity?: string | null;
+  resolution_guidance?: string | null;
   possible_warranty_issue?: boolean | null;
   evidence_findings?: string[];
   evidence_consistency?: string | null;
@@ -28,6 +29,7 @@ export default function AIAnalysisCard({ analysis = {} }: { analysis?: Analysis 
         <span><small>ISSUE</small><strong>{(analysis.reason_classification || 'unclear').replaceAll('_', ' ')}</strong></span>
         {analysis.reason_alignment && <span><small>REASON MATCH</small><strong>{analysis.reason_alignment.replaceAll('_', ' ')}</strong></span>}
         <span><small>SEVERITY</small><strong>{analysis.severity || 'unclear'}</strong></span>
+        {analysis.resolution_guidance && <span><small>RESOLUTION SIGNAL</small><strong>{analysis.resolution_guidance.replaceAll('_', ' ')}</strong></span>}
         <span><small>IMAGE PIXELS</small><strong>not analyzed</strong></span>
         {analysis.possible_warranty_issue !== null && analysis.possible_warranty_issue !== undefined && <span><small>WARRANTY SIGNAL</small><strong>{analysis.possible_warranty_issue ? 'Possible' : 'Not indicated'}</strong></span>}
       </div>
