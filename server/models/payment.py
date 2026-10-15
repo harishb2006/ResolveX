@@ -16,6 +16,7 @@ class Payment(Base):
     id = Column(Integer, primary_key=True, index=True)
     order_id = Column(Integer, ForeignKey("orders.id"), nullable=False, unique=True)
     amount = Column(Float, nullable=False)
+    refunded_amount = Column(Float, nullable=False, default=0.0, server_default="0")
     payment_method = Column(String, nullable=False)
     status = Column(Enum(PaymentStatus), default=PaymentStatus.PENDING)
     transaction_id = Column(String, unique=True, index=True, nullable=True)

@@ -26,6 +26,13 @@ with engine.begin() as connection:
     connection.execute(text("ALTER TABLE returns ADD COLUMN IF NOT EXISTS ai_analysis JSON NOT NULL DEFAULT '{}'::json"))
     connection.execute(text("ALTER TABLE returns ADD COLUMN IF NOT EXISTS agent_audit JSON NOT NULL DEFAULT '{}'::json"))
     connection.execute(text("ALTER TABLE returns ADD COLUMN IF NOT EXISTS reasons JSON NOT NULL DEFAULT '[]'::json"))
+    connection.execute(text("ALTER TABLE returns ADD COLUMN IF NOT EXISTS refund_status VARCHAR NOT NULL DEFAULT 'not_requested'"))
+    connection.execute(text("ALTER TABLE returns ADD COLUMN IF NOT EXISTS refund_amount FLOAT"))
+    connection.execute(text("ALTER TABLE returns ADD COLUMN IF NOT EXISTS refund_idempotency_key VARCHAR"))
+    connection.execute(text("ALTER TABLE returns ADD COLUMN IF NOT EXISTS refund_reference VARCHAR"))
+    connection.execute(text("ALTER TABLE returns ADD COLUMN IF NOT EXISTS refund_updated_at TIMESTAMPTZ"))
+    connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_returns_refund_idempotency_key ON returns (refund_idempotency_key) WHERE refund_idempotency_key IS NOT NULL"))
+    connection.execute(text("ALTER TABLE payments ADD COLUMN IF NOT EXISTS refunded_amount FLOAT NOT NULL DEFAULT 0"))
 
 from fastapi.middleware.cors import CORSMiddleware
 

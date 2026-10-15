@@ -1125,9 +1125,11 @@ An auditable server-side harness now runs distinct roles: deterministic policy e
 
 Low or missing Jev confidence, unavailable or malformed Jev results, conflicts between the selected reason and claim text, risk threshold conflicts, warranty paths, and high-value claims are sent to the human review queue. Eligible cases are only proposed for approval when no escalation is present. Admin approval records a case decision; it does not move money or create a shipment. Jev output is never authorization to execute a refund.
 
-### Phase 7 — Guarded Refund Execution
+### Phase 7 — Guarded Refund Execution (sandbox implemented)
 
-Add a payment adapter in sandbox mode first. Require a validated eligible decision, amount/order matching, idempotency keys, refund caps, an explicit state machine, and a human approval path for exceptions. Restrict tools to allowlisted actions; never let an LLM call a payment provider directly. Add reconciliation for timeouts where a provider may have processed a refund despite a lost response.
+New storefront demo orders now receive a successful **sandbox-only** payment record. Policy-approved `AUTO_REFUND` cases and reviewer-approved `APPROVED_REFUND` cases run through a deterministic local sandbox adapter; no live payment provider is called and no money moves. Execution requires an approved refund decision, a successful original payment, exact payment/order total matching, a positive item refund amount, and enough unrefunded balance. Each return has a stable idempotency key, and the payment tracks cumulative refunded value to enforce the cap. Return refund states are `not_requested`, `pending`, `succeeded`, `failed`, and `reconciliation_required`; admins can inspect the state and reconcile an uncertain sandbox result by idempotency key. High-risk, uncertain, and policy-exception cases still require explicit human approval. Jev has no payment tools.
+
+Existing demo orders without a payment record fail closed and cannot be refunded. `PAYMENT_MODE` defaults to `sandbox`; any other value disables execution. A real payment provider adapter, provider-side reconciliation, and operational alerting remain future work before production use.
 
 ### Phase 8 — Observability + Evals
 
