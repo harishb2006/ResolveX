@@ -14,6 +14,7 @@ class ReturnDecision(BaseModel):
     desired_resolution: str
     customer_message: str
     next_step: str
+    refund: Dict[str, Any] = Field(default_factory=dict)
 
 class AdminReview(BaseModel):
     id: str
@@ -35,3 +36,4 @@ class AdminReview(BaseModel):
     decision: str = "MANUAL_REVIEW"
     reasons: List[str] = Field(default_factory=list)
     policy_checks: List[Dict[str, Any]] = Field(default_factory=list)
+    refund: Dict[str, Any] = Field(default_factory=dict)

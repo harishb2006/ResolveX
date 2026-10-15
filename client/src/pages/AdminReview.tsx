@@ -29,11 +29,18 @@ export default function AdminReview() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status })
       });
-      if (!response.ok) throw new Error('Could not save decision');
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.detail || 'Could not save decision');
+      }
+      const body = await response.json();
+      if (status === 'APPROVED_REFUND' && body.refund?.status !== 'succeeded') {
+        alert(`Decision recorded. Refund status: ${body.refund?.status || 'unknown'}. No live payment was moved.`);
+      }
       navigate('/admin');
     } catch (e) {
       console.error(e);
-      alert('Failed to save decision');
+      alert(e instanceof Error ? e.message : 'Failed to save decision');
     } finally {
       setSaving(false);
     }
@@ -67,7 +74,7 @@ export default function AdminReview() {
       <aside className="review-detail-side">
         <section className="detail-panel confidence-panel"><span className="subtle-label">DECISION SIGNALS</span><div className="signal-row"><span>Decision confidence</span><strong>{(review.confidence * 100).toFixed(0)}%</strong></div><div className="signal-meter"><i style={{ width: `${review.confidence * 100}%` }} /></div></section>
         <RiskBreakdown score={review.risk_score} level={review.risk_level || 'LOW'} threshold={review.risk_threshold ?? 0.6} factors={review.risk_factors || []} />
-        <section className="detail-panel decision-panel"><div className="panel-title"><span className="panel-title-icon violet"><Icon name="check" /></span><div><strong>Record a decision</strong><small>This closes the pending case.</small></div></div><div className="decision-actions"><button disabled={saving} onClick={() => handleDecision('APPROVED_REFUND')} className="decision-action approve"><Icon name="check" size={16} /><span><strong>Approve refund</strong><small>Accept the return</small></span><Icon name="arrow" size={14} /></button><button disabled={saving} onClick={() => handleDecision('APPROVED_REPLACE')} className="decision-action replace"><Icon name="box" size={16} /><span><strong>Approve replacement</strong><small>Send another item</small></span><Icon name="arrow" size={14} /></button><button disabled={saving} onClick={() => handleDecision('WARRANTY_SERVICE')} className="decision-action warranty"><Icon name="shield" size={16} /><span><strong>Warranty service</strong><small>Route for repair</small></span><Icon name="arrow" size={14} /></button><button disabled={saving} onClick={() => handleDecision('REJECTED')} className="decision-action reject"><Icon name="box" size={16} /><span><strong>Reject request</strong><small>Explain the policy outcome</small></span><Icon name="arrow" size={14} /></button></div>{saving && <div className="saving-note"><span className="mini-spinner" /> Saving decision…</div>}</section>
+        <section className="detail-panel decision-panel"><div className="panel-title"><span className="panel-title-icon violet"><Icon name="check" /></span><div><strong>Review and resolve</strong><small>Refund approval runs through the local sandbox only.</small></div></div><div className="decision-actions"><button disabled={saving} onClick={() => handleDecision('APPROVED_REFUND')} className="decision-action approve"><Icon name="check" size={16} /><span><strong>Approve sandbox refund</strong><small>Record approval and simulate refund</small></span><Icon name="arrow" size={14} /></button><button disabled={saving} onClick={() => handleDecision('APPROVED_REPLACE')} className="decision-action replace"><Icon name="box" size={16} /><span><strong>Approve replacement</strong><small>Record return approval</small></span><Icon name="arrow" size={14} /></button><button disabled={saving} onClick={() => handleDecision('WARRANTY_SERVICE')} className="decision-action warranty"><Icon name="shield" size={16} /><span><strong>Warranty service</strong><small>Route for repair</small></span><Icon name="arrow" size={14} /></button><button disabled={saving} onClick={() => handleDecision('REJECTED')} className="decision-action reject"><Icon name="box" size={16} /><span><strong>Reject request</strong><small>Explain the policy outcome</small></span><Icon name="arrow" size={14} /></button></div>{saving && <div className="saving-note"><span className="mini-spinner" /> Saving decision…</div>}</section>
       </aside>
     </div>
   </div>;

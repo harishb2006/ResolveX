@@ -11,6 +11,7 @@ from services.agent_harness import run_return_harness
 from services.policy_engine import evaluate_policy
 from services.risk_engine import RISK_REVIEW_THRESHOLD
 from services.ai_evidence import evidence_is_valid
+from services.refund_execution import execute_refund, reconcile_refund, refund_status
 from routers.auth_router import require_admin, require_customer
 
 router = APIRouter(prefix="/returns", tags=["Returns"])
@@ -49,6 +50,7 @@ def review_payload(ret):
         agent_audit=ret.agent_audit or {},
         status=ret.status.value.upper(), decision=ret.decision, reasons=ret.reasons or [],
         policy_checks=[],
+        refund=refund_status(ret),
     )
 
 
@@ -89,6 +91,7 @@ def create_demo_order(payload: dict, principal: dict = Depends(require_customer)
     db.flush()
     item = models.OrderItem(order_id=order.id, product_id=product.id, quantity=1, unit_price=price)
     db.add(item)
+    db.add(models.Payment(order=order, amount=price, refunded_amount=0, payment_method="sandbox", status=models.PaymentStatus.SUCCESSFUL, transaction_id=f"sandbox-payment-order-{order.id}"))
     db.commit()
     return {"orderId": f"ORD-{order.id:03d}", "productName": name, "price": f"₹{price:,.0f}",
             "purchaseDate": order.created_at.isoformat() if order.created_at else None,
@@ -129,9 +132,14 @@ def create_return(req: ReturnRequest, principal: dict = Depends(require_customer
         db.rollback()
         raise HTTPException(status_code=409, detail="A return request already exists for this item")
     db.refresh(ret)
+    if decision == "AUTO_REFUND":
+        ret = execute_refund(db, ret)
     message, next_step = customer_outcome(decision, req.desired_resolution, reasons)
+    if ret.refund_status == "succeeded":
+        message = "Your refund has been processed in the payment sandbox."
+        next_step = "No real payment was moved; this is a sandbox transaction."
     return ReturnDecision(id=str(ret.id), decision=decision, desired_resolution=req.desired_resolution,
-                          customer_message=message, next_step=next_step)
+                          customer_message=message, next_step=next_step, refund=refund_status(ret))
 
 
 @router.get("/admin", response_model=List[AdminReview])
@@ -158,6 +166,8 @@ def make_admin_decision(review_id: str, decision: dict, principal: dict = Depend
     case = db.query(models.Return).filter(models.Return.id == int(review_id)).first()
     if not case:
         raise HTTPException(status_code=404, detail="Review not found")
+    if case.status != models.ReturnStatus.REQUESTED:
+        raise HTTPException(status_code=409, detail="This return case has already been resolved")
     status_map = {"APPROVED_REFUND": models.ReturnStatus.APPROVED, "APPROVED_REPLACE": models.ReturnStatus.APPROVED,
                   "WARRANTY_SERVICE": models.ReturnStatus.APPROVED, "REJECTED": models.ReturnStatus.REJECTED}
     choice = decision.get("status")
@@ -177,4 +187,32 @@ def make_admin_decision(review_id: str, decision: dict, principal: dict = Depend
     audit["events"] = events
     case.agent_audit = audit
     db.commit()
-    return {"message": f"Review {review_id} updated", "status": choice}
+    if choice == "APPROVED_REFUND":
+        case = execute_refund(db, case)
+    return {"message": f"Review {review_id} updated", "status": choice, "refund": refund_status(case)}
+
+
+@router.post("/admin/{review_id}/refund/reconcile")
+def reconcile_admin_refund(review_id: str, principal: dict = Depends(require_admin), db: Session = Depends(get_db)):
+    case = db.query(models.Return).filter(models.Return.id == int(review_id)).first()
+    if not case:
+        raise HTTPException(status_code=404, detail="Return request not found")
+    case = reconcile_refund(db, case)
+    return {"status": case.refund_status, "refund": refund_status(case)}
+
+
+@router.post("/admin/{review_id}/refund/execute")
+def execute_admin_refund(review_id: str, principal: dict = Depends(require_admin), db: Session = Depends(get_db)):
+    case = db.query(models.Return).filter(models.Return.id == int(review_id)).first()
+    if not case:
+        raise HTTPException(status_code=404, detail="Return request not found")
+    case = execute_refund(db, case)
+    return {"status": case.refund_status, "refund": refund_status(case)}
+
+
+@router.get("/admin/{review_id}/refund")
+def get_admin_refund_status(review_id: str, principal: dict = Depends(require_admin), db: Session = Depends(get_db)):
+    case = db.query(models.Return).filter(models.Return.id == int(review_id)).first()
+    if not case:
+        raise HTTPException(status_code=404, detail="Return request not found")
+    return refund_status(case)

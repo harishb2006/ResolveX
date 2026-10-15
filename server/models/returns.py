@@ -26,6 +26,11 @@ class Return(Base):
     ai_analysis = Column(JSON, nullable=False, default=dict)
     agent_audit = Column(JSON, nullable=False, default=dict)
     reasons = Column(JSON, nullable=False, default=list)
+    refund_status = Column(String, nullable=False, default="not_requested", server_default="not_requested")
+    refund_amount = Column(Float, nullable=True)
+    refund_idempotency_key = Column(String, nullable=True)
+    refund_reference = Column(String, nullable=True)
+    refund_updated_at = Column(DateTime(timezone=True), nullable=True)
     status = Column(Enum(ReturnStatus), default=ReturnStatus.REQUESTED)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
